@@ -1,0 +1,81 @@
+name: Build All Platforms
+
+on:
+  workflow_dispatch: # 手动点击按钮触发
+  push:
+    branches: [ main ] # 每次推送代码自动触发
+
+jobs:
+  build:
+    name: Build for ${{ matrix.platform }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # 同时开启 4 台虚拟机并行编译
+        platform: ["x86/64", "rockchip/armv8", "mediatek/filogic", "ramips/mt7621"]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Initialization Environment
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+          gettext git libncurses-dev libssl-dev python3-distutils rsync unzip zlib1g-dev \
+          file wget subversion swig
+
+      - name: Clone ImmortalWrt
+        run: |
+          git clone -b master --depth 1 https://github.com/immortalwrt/immortalwrt.git source
+          cd source
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Setup Custom Package
+        run: |
+          mkdir -p source/package/custom
+          # 将你仓库根目录的源码复制到编译目录
+          cp -r iptest source/package/custom/
+          cp -r luci-app-iptest source/package/custom/
+
+      - name: Compile Packages
+        run: |
+          cd source
+          TARGET=$(echo ${{ matrix.platform }} | cut -d'/' -f1)
+          SUBTARGET=$(echo ${{ matrix.platform }} | cut -d'/' -f2)
+          
+          # 1. 基础架构配置
+          echo "CONFIG_TARGET_${TARGET}=y" > .config
+          echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
+          
+          # 2. RAX3000M 精准匹配
+          if [ "$SUBTARGET" == "filogic" ]; then
+            echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_cmcc_rax3000m=y" >> .config
+          fi
+          
+          # 3. 开启双格式支持 (同时产出 apk 和 ipk)
+          echo "CONFIG_PACKAGE_APK=y" >> .config
+          echo "CONFIG_PACKAGE_IPKG=y" >> .config
+          
+          # 4. 选中插件
+          echo "CONFIG_PACKAGE_iptest=m" >> .config
+          echo "CONFIG_PACKAGE_luci-app-iptest=m" >> .config
+          
+          make defconfig
+          # 仅编译插件，不编译固件，速度极快
+          make package/custom/iptest/compile V=s -j$(nproc) || true
+          make package/custom/luci-app-iptest/compile V=s -j$(nproc) || true
+
+      - name: Organize Files
+        run: |
+          mkdir -p publish
+          # 收集所有生成的 apk 和 ipk
+          find source/bin/packages/ -name "*iptest*.*" -exec cp {} publish/ \;
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: iptest-packages-${{ strategy.job-index }}
+          path: publish/

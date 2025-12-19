@@ -36,55 +36,153 @@ jobs:
 
       - name: Setup Custom Package
         run: |
-          # 1. 创建目标目录结构
+          # 创建目标目录结构
           mkdir -p source/package/custom/iptest/src
           
-          # 2. 健壮复制逻辑：直接复制目录内容而非使用复杂的 find
           # 复制 Makefile 到包根目录
           if [ -f "iptest/Makefile" ]; then
-            cp iptest/Makefile source/package/custom/iptest/Makefile
+            cp "iptest/Makefile" source/package/custom/iptest/Makefile
+          else
+            echo "错误: iptest/Makefile 不存在！"
+            exit 1
           fi
           
-          # 复制所有源码到 src 目录，确保针对 Makefile 中的 ./src/* 路径
-          # 使用 -r 确保即使有子目录也能完整保留
+          # 复制源码到 src 目录（现在仓库中 iptest/ 直接包含 go.mod、go.sum、iptest.go）
           if [ -d "iptest" ]; then
-            cp -r iptest/. source/package/custom/iptest/src/
-            # 清理 src 目录下误入的 Makefile（Makefile 应该在上一级）
+            cp -r iptest/* source/package/custom/iptest/src/
+            # 防止误复制 Makefile 到 src（应该只在包根）
             rm -f source/package/custom/iptest/src/Makefile
+          else
+            echo "错误: iptest 目录不存在！"
+            exit 1
           fi
           
-          # 3. 复制 LuCI 界面部分
+          # 复制 LuCI 界面部分（如果存在）
           if [ -d "luci-app-iptest" ]; then
             cp -r luci-app-iptest source/package/custom/
           fi
           
-          # 验证文件结构 (调试用)
-          echo "检查文件存放结果:"
+          # 验证文件结构
+          echo "=== package/custom/iptest 目录结构 ==="
           ls -R source/package/custom/iptest/
+          echo "=== src 目录内容 ==="
+          ls -la source/package/custom/iptest/src/
 
       - name: Compile Packages
         run: |
           cd source
-          TARGET=$(echo ${{ matrix.platform }} | cut -d'/' -f1)
+          
+          # 解析平台
+          TARGET=$(echo ${{ matrix.platform }} | cut -d'/' -f1 | tr '/' '_')
           SUBTARGET=$(echo ${{ matrix.platform }} | cut -d'/' -f2)
           
-          # 写入配置
+          # 基本配置
           echo "CONFIG_TARGET_${TARGET}=y" > .config
-          echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
+          echo "CONFIG_TARGET_\( {TARGET}_ \){SUBTARGET}=y" >> .config
           
-          # 针对 RAX3000M 的特定配置
-          if [ "$SUBTARGET" == "filogic" ]; then
+          # 针对 RAX3000M 的特定设备配置（mediatek/filogic）
+          if [ "${{ matrix.platform }}" = "mediatek/filogic" ]; then
             echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_cmcc_rax3000m=y" >> .config
           fi
           
-          # 开启双格式支持并选中插件
+          # 启用双格式支持并选中自定义包
           echo "CONFIG_PACKAGE_APK=y" >> .config
           echo "CONFIG_PACKAGE_IPKG=y" >> .config
           echo "CONFIG_PACKAGE_iptest=m" >> .config
-          echo "CONFIG_PACKAGE_luci-app-iptest=m" >> .config
+          if [ -d "package/custom/luci-app-iptest" ]; then
+            echo "CONFIG_PACKAGE_luci-app-iptest=m" >> .config
+          fi
           
           make defconfig
           
+          # 准备宿主机工具和工具链
+          echo ">> 正在准备宿主机工具和工具链..."
+          make tools/install -j$(nproc) || make tools/install V=s
+          make toolchain/install -j$(nproc) || make toolchain/install V=s
+          
+          # Go 编译环境优化
+          # 现在已有 go.mod，正常使用模块模式
+          # 如果 iptest 是纯 Go（无 CGO 依赖），设为 0 可避免交叉编译问题
+          # 如果有 CGO 依赖，可改为 export CGO_ENABLED=1
+          export CGO_ENABLED=0
+          
+          # 编译 iptest 核心程序
+          echo ">> 正在编译 iptest 核心程序..."
+          make package/custom/iptest/compile V=s -j$(nproc) || make package/custom/iptest/compile V=s
+          
+          # 编译 LuCI 界面（如果存在）
+          if [ -d "package/custom/luci-app-iptest" ]; then
+            echo ">> 正在编译 luci-app-iptest..."
+            make package/custom/luci-app-iptest/compile V=s -j$(nproc) || make package/custom/luci-app-iptest/compile V=s
+          fi
+
+      - name: Organize Files
+        run: |
+          mkdir -p publish
+          echo ">> 搜集编译产物（iptest 相关 ipk/apk）..."
+          find source/bin/ -type f \( -name "*.ipk" -o -name "*.apk" \) | grep -i "iptest" | xargs -I {} cp {} publish/
+          echo ">> 搜集所有产物（完整列表）..."
+          find source/bin/ -type f \( -name "*.ipk" -o -name "*.apk" \) -exec cp {} publish/ \;
+
+      - name: Check Results
+        run: |
+          echo "📦 最终产物清单:"
+          ls -lh publish/
+          if [ -z "$(ls -A publish)" ]; then
+            echo "❌ 错误: 未发现任何编译产物!"
+            exit 1
+          fi
+          echo "✅ 编译产物已收集到 publish/ 目录"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: iptest-${{ matrix.platform == 'x86/64' && 'x86_64' || (matrix.platform == 'rockchip/armv8' && 'rockchip_armv8' || (matrix.platform == 'mediatek/filogic' && 'filogic' || 'mt7621')) }}
+          path: publish/          
+          # 准备宿主机工具和工具链
+          echo ">> 正在准备宿主机工具和工具链..."
+          make tools/install -j$(nproc) || make tools/install V=s
+          make toolchain/install -j$(nproc) || make toolchain/install V=s
+          
+          # Go 编译环境优化
+          # 现在已有 go.mod，正常使用模块模式
+          # 如果 iptest 是纯 Go（无 CGO 依赖），设为 0 可避免交叉编译问题
+          # 如果有 CGO 依赖，可改为 export CGO_ENABLED=1
+          export CGO_ENABLED=0
+          
+          # 编译 iptest 核心程序
+          echo ">> 正在编译 iptest 核心程序..."
+          make package/custom/iptest/compile V=s -j$(nproc) || make package/custom/iptest/compile V=s
+          
+          # 编译 LuCI 界面（如果存在）
+          if [ -d "package/custom/luci-app-iptest" ]; then
+            echo ">> 正在编译 luci-app-iptest..."
+            make package/custom/luci-app-iptest/compile V=s -j$(nproc) || make package/custom/luci-app-iptest/compile V=s
+          fi
+
+      - name: Organize Files
+        run: |
+          mkdir -p publish
+          echo ">> 搜集编译产物（iptest 相关 ipk/apk）..."
+          find source/bin/ -type f \( -name "*.ipk" -o -name "*.apk" \) | grep -i "iptest" | xargs -I {} cp {} publish/
+          echo ">> 搜集所有产物（完整列表）..."
+          find source/bin/ -type f \( -name "*.ipk" -o -name "*.apk" \) -exec cp {} publish/ \;
+
+      - name: Check Results
+        run: |
+          echo "📦 最终产物清单:"
+          ls -lh publish/
+          if [ -z "$(ls -A publish)" ]; then
+            echo "❌ 错误: 未发现任何编译产物!"
+            exit 1
+          fi
+          echo "✅ 编译产物已收集到 publish/ 目录"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: iptest-${{ matrix.platform == 'x86/64' && 'x86_64' || (matrix.platform == 'rockchip/armv8' && 'rockchip_armv8' || (matrix.platform == 'mediatek/filogic' && 'filogic' || 'mt7621')) }}
+          path: publish/          
           # 编译宿主机工具和工具链
           echo ">> 正在准备宿主机工具和工具链..."
           make tools/install -j$(nproc)

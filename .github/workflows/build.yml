@@ -36,19 +36,31 @@ jobs:
 
       - name: Setup Custom Package
         run: |
-          # 1. 为 iptest 创建符合 Makefile 要求的结构
+          # 1. 创建目标目录结构
           mkdir -p source/package/custom/iptest/src
           
-          # 2. 复制 Go 源码到 src 目录 (适配 Makefile 中的 ./src/*)
-          if [ -d "iptest" ]; then
-            find iptest/ -maxdepth 1 -type f \( -name "*.go" -o -name "*.mod" -o -name "*.sum" \) -exec cp {} source/package/custom/iptest/src/ \;
+          # 2. 健壮复制逻辑：直接复制目录内容而非使用复杂的 find
+          # 复制 Makefile 到包根目录
+          if [ -f "iptest/Makefile" ]; then
             cp iptest/Makefile source/package/custom/iptest/Makefile
+          fi
+          
+          # 复制所有源码到 src 目录，确保针对 Makefile 中的 ./src/* 路径
+          # 使用 -r 确保即使有子目录也能完整保留
+          if [ -d "iptest" ]; then
+            cp -r iptest/. source/package/custom/iptest/src/
+            # 清理 src 目录下误入的 Makefile（Makefile 应该在上一级）
+            rm -f source/package/custom/iptest/src/Makefile
           fi
           
           # 3. 复制 LuCI 界面部分
           if [ -d "luci-app-iptest" ]; then
             cp -r luci-app-iptest source/package/custom/
           fi
+          
+          # 验证文件结构 (调试用)
+          echo "检查文件存放结果:"
+          ls -R source/package/custom/iptest/
 
       - name: Compile Packages
         run: |
@@ -73,10 +85,13 @@ jobs:
           
           make defconfig
           
-          # 关键修正：先安装必要的宿主机工具和工具链，解决 openssl 等文件缺失问题
-          echo ">> 正在准备宿主机工具和工具链 (此步骤耗时较长)..."
+          # 编译宿主机工具和工具链
+          echo ">> 正在准备宿主机工具和工具链..."
           make tools/install -j$(nproc)
           make toolchain/install -j$(nproc)
+          
+          # 【核心修复】强制禁用 CGO 以解决本地及 MIPS 架构的编译报错
+          export CGO_ENABLED=0
           
           echo ">> 正在编译核心程序..."
           make package/custom/iptest/compile V=s -j$(nproc)
@@ -88,8 +103,8 @@ jobs:
         run: |
           mkdir -p publish
           echo ">> 搜集编译产物..."
-          # 搜集所有原始文件名的 ipk 和 apk
-          find source/bin/packages/ -type f \( -name "*.ipk" -o -name "*.apk" \) -name "*iptest*" -exec cp {} publish/ \;
+          # 使用更广的搜索范围
+          find source/bin/ -type f \( -name "*.ipk" -o -name "*.apk" \) -name "*iptest*" -exec cp {} publish/ \;
 
       - name: Check Results
         run: |
@@ -103,6 +118,5 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          # 下载时显示的名称，内部文件名保持原样
           name: iptest-${{ matrix.platform == 'x86/64' && 'x86_64' || (matrix.platform == 'rockchip/armv8' && 'rockchip_armv8' || (matrix.platform == 'mediatek/filogic' && 'filogic' || 'mt7621')) }}
           path: publish/

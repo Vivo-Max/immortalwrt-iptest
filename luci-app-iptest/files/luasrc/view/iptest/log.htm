@@ -1,0 +1,15 @@
+<%+header%>
+
+<h2>运行日志（实时刷新，每3秒）</h2>
+<pre id="logcontent" style="height:600px; overflow:auto; background:#f0f0f0; padding:10px;">
+    <%= luci.sys.exec("if [ -f /tmp/iptest.log ]; then tail -n 100 /tmp/iptest.log; else echo '日志文件不存在，请先运行测试'; fi") %>
+</pre>
+
+<script type="text/javascript">
+    setInterval(function() {
+        location.reload();
+    }, 3000);  // 简单粗暴：每3秒刷新页面
+</script>
+
+<p>页面自动刷新中... 如果卡顿，可手动刷新。</p>
+<%+footer%>

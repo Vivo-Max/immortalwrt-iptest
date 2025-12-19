@@ -1,9 +1,9 @@
 name: Build All Platforms
 
 on:
-  workflow_dispatch: # 手动触发
+  workflow_dispatch:
   push:
-    branches: [ main ] # 推送 main 分支时触发
+    branches: [ main ]
 
 jobs:
   build:
@@ -12,7 +12,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 并行编译 4 种架构
         platform: ["x86/64", "rockchip/armv8", "mediatek/filogic", "ramips/mt7621"]
 
     steps:
@@ -22,10 +21,10 @@ jobs:
       - name: Initialization Environment
         run: |
           sudo apt update
-          # 修正：移除已弃用的 python3-distutils，改用 python3-setuptools 和 python3-dev
+          # 核心修复：加入 python3-pyelftools
           sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-          gettext git libncurses-dev libssl-dev python3-setuptools python3-dev rsync unzip zlib1g-dev \
-          file wget subversion swig
+          gettext git libncurses-dev libssl-dev python3-setuptools python3-dev python3-pyelftools \
+          rsync unzip zlib1g-dev file wget subversion swig
 
       - name: Clone ImmortalWrt
         run: |
@@ -36,17 +35,11 @@ jobs:
 
       - name: Setup Custom Package
         run: |
-          # 1. 创建符合 Makefile 结构的源码目录
           mkdir -p source/package/custom/iptest/src
-          
-          # 2. 复制 Go 源码到 src 目录 (适配你的 Makefile: ./src/*)
           if [ -d "iptest" ]; then
-            # 查找并移动所有 .go 和 .mod 文件
             find iptest/ -maxdepth 1 -type f \( -name "*.go" -o -name "*.mod" -o -name "*.sum" \) -exec cp {} source/package/custom/iptest/src/ \;
             cp iptest/Makefile source/package/custom/iptest/Makefile
           fi
-          
-          # 3. 复制 LuCI 界面代码
           if [ -d "luci-app-iptest" ]; then
             cp -r luci-app-iptest source/package/custom/
           fi
@@ -57,16 +50,13 @@ jobs:
           TARGET=$(echo ${{ matrix.platform }} | cut -d'/' -f1)
           SUBTARGET=$(echo ${{ matrix.platform }} | cut -d'/' -f2)
           
-          # 写入目标平台配置
           echo "CONFIG_TARGET_${TARGET}=y" > .config
           echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
           
-          # RAX3000M 专用设备配置
           if [ "$SUBTARGET" == "filogic" ]; then
             echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_cmcc_rax3000m=y" >> .config
           fi
           
-          # 开启双包管理器格式并选中插件
           echo "CONFIG_PACKAGE_APK=y" >> .config
           echo "CONFIG_PACKAGE_IPKG=y" >> .config
           echo "CONFIG_PACKAGE_iptest=m" >> .config
@@ -74,31 +64,25 @@ jobs:
           
           make defconfig
           
-          echo ">> 正在编译核心程序..."
+          echo ">> 正在编译..."
           make package/custom/iptest/compile V=s -j$(nproc)
-          
-          echo ">> 正在编译界面程序..."
           make package/custom/luci-app-iptest/compile V=s -j$(nproc)
 
       - name: Organize Files
         run: |
           mkdir -p publish
-          echo ">> 收集编译产物 (不含时间戳)..."
-          # 递归搜索所有生成的 apk 和 ipk 并放入发布目录
           find source/bin/packages/ -type f \( -name "*.ipk" -o -name "*.apk" \) -name "*iptest*" -exec cp {} publish/ \;
 
       - name: Check Results
         run: |
-          echo "📦 最终产物清单:"
           ls -lh publish/
           if [ -z "$(ls -A publish)" ]; then
-            echo "❌ 错误: 未找到生成的安装包，请检查上方编译日志!"
+            echo "❌ 错误: 未发现产物!"
             exit 1
           fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          # 下载时的名称，例如 iptest-filogic
           name: iptest-${{ matrix.platform == 'x86/64' && 'x86_64' || (matrix.platform == 'rockchip/armv8' && 'rockchip_armv8' || (matrix.platform == 'mediatek/filogic' && 'filogic' || 'mt7621')) }}
           path: publish/

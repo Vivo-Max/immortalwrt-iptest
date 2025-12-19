@@ -1,5 +1,5 @@
 module iptest
 
-go 1.25.4
+go 1.22
 
 require golang.org/x/net v0.48.0

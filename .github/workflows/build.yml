@@ -1,9 +1,9 @@
 name: Build All Platforms
 
 on:
-  workflow_dispatch: # 手动点击按钮触发
+  workflow_dispatch: # 支持在 Actions 页面手动点击按钮触发
   push:
-    branches: [ main ] # 每次推送代码自动触发
+    branches: [ main ] # 每次推送代码到 main 分支自动触发
 
 jobs:
   build:
@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 同时开启 4 台虚拟机并行编译
+        # 同时开启 4 台虚拟机并行编译不同架构
         platform: ["x86/64", "rockchip/armv8", "mediatek/filogic", "ramips/mt7621"]
 
     steps:
@@ -28,16 +28,28 @@ jobs:
 
       - name: Clone ImmortalWrt
         run: |
+          # 使用 --depth 1 提高克隆速度
           git clone -b master --depth 1 https://github.com/immortalwrt/immortalwrt.git source
           cd source
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Setup Custom Package
+      - name: Setup Custom Package (Fixing Source Path)
         run: |
-          mkdir -p source/package/custom
-          # 将你仓库根目录的源码复制到编译目录
-          cp -r iptest source/package/custom/
+          # 1. 为 iptest 创建符合 Makefile 要求的结构
+          mkdir -p source/package/custom/iptest/src
+          
+          # 2. 将仓库根目录的 iptest.go 移动到 src 目录下（适配你的 Makefile ./src/*）
+          if [ -f "iptest/iptest.go" ]; then
+            cp iptest/iptest.go source/package/custom/iptest/src/
+          fi
+          # 如果你有其他 go 文件，也一并移动
+          cp iptest/*.go source/package/custom/iptest/src/ 2>/dev/null || true
+          
+          # 3. 复制 Makefile 到插件根目录
+          cp iptest/Makefile source/package/custom/iptest/Makefile
+          
+          # 4. 复制 LuCI 界面部分
           cp -r luci-app-iptest source/package/custom/
 
       - name: Compile Packages
@@ -46,36 +58,57 @@ jobs:
           TARGET=$(echo ${{ matrix.platform }} | cut -d'/' -f1)
           SUBTARGET=$(echo ${{ matrix.platform }} | cut -d'/' -f2)
           
-          # 1. 基础架构配置
+          # --- 写入编译配置 ---
           echo "CONFIG_TARGET_${TARGET}=y" > .config
           echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
           
-          # 2. RAX3000M 精准匹配
+          # 为 RAX3000M 开启特定优化
           if [ "$SUBTARGET" == "filogic" ]; then
             echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_cmcc_rax3000m=y" >> .config
           fi
           
-          # 3. 开启双格式支持 (同时产出 apk 和 ipk)
+          # 开启双格式支持并选中插件
           echo "CONFIG_PACKAGE_APK=y" >> .config
           echo "CONFIG_PACKAGE_IPKG=y" >> .config
-          
-          # 4. 选中插件
           echo "CONFIG_PACKAGE_iptest=m" >> .config
           echo "CONFIG_PACKAGE_luci-app-iptest=m" >> .config
           
           make defconfig
-          # 仅编译插件，不编译固件，速度极快
-          make package/custom/iptest/compile V=s -j$(nproc) || true
-          make package/custom/luci-app-iptest/compile V=s -j$(nproc) || true
+          
+          # 执行编译（去掉了 || true，报错会立即停止并显示日志以便排查）
+          echo ">> 编译核心程序..."
+          make package/custom/iptest/compile V=s -j$(nproc)
+          
+          echo ">> 编译界面程序..."
+          make package/custom/luci-app-iptest/compile V=s -j$(nproc)
 
       - name: Organize Files
         run: |
           mkdir -p publish
-          # 收集所有生成的 apk 和 ipk
-          find source/bin/packages/ -name "*iptest*.*" -exec cp {} publish/ \;
+          # 获取当前日期用于区分版本
+          DATE_TAG=$(date +%Y%m%d)
+          # 替换平台斜杠，如 x86/64 -> x86_64
+          PLAT_TAG=$(echo ${{ matrix.platform }} | tr '/' '_')
+          
+          echo ">> 正在收集产物..."
+          find source/bin/packages/ -type f \( -name "*.ipk" -o -name "*.apk" \) -name "*iptest*" | while read -r file; do
+            ext="${file##*.}"
+            base=$(basename "$file" ".$ext")
+            # 最终文件名格式：iptest_1.2-1_x86_64_20251220.ipk
+            cp "$file" "publish/${base}_${PLAT_TAG}_${DATE_TAG}.${ext}"
+          done
+
+      - name: Check Results
+        run: |
+          if [ -z "$(ls -A publish)" ]; then
+            echo "❌ 错误：未发现编译产物！请检查上方编译日志。"
+            exit 1
+          fi
+          ls -lh publish/
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: iptest-packages-${{ strategy.job-index }}
+          # 产物包名：iptest-x86_64 等
+          name: iptest-${{ matrix.platform == 'x86/64' && 'x86_64' || (matrix.platform == 'rockchip/armv8' && 'rockchip_armv8' || (matrix.platform == 'mediatek/filogic' && 'filogic' || 'mt7621')) }}
           path: publish/

@@ -45,7 +45,7 @@ jobs:
             cp -r luci-app-iptest source/package/custom/
           fi
           
-          echo "=== 包结构验证 ==="
+          echo "=== Package structure verification ==="
           ls -R source/package/custom/iptest/
           ls -la source/package/custom/iptest/src/
 
@@ -79,6 +79,36 @@ EOF
           make defconfig
           
           make tools/install -j$(nproc) || make tools/install V=s
+          make toolchain/install -j$(nproc) || make toolchain/install V=s
+          
+          make package/custom/iptest/compile V=s -j$(nproc) || make package/custom/iptest/compile V=s
+          
+          if [ -d "package/custom/luci-app-iptest" ]; then
+            make package/custom/luci-app-iptest/compile V=s -j$(nproc) || make package/custom/luci-app-iptest/compile V=s
+          fi
+          
+          make package/custom/iptest/install V=s
+
+      - name: Organize Files
+        run: |
+          mkdir -p publish
+          find source/bin/ -type f \( -name "*.ipk" -o -name "*.apk" \) | grep -i "iptest" | xargs -I {} cp {} publish/ || true
+          find source/bin/ -type f \( -name "*.ipk" -o -name "*.apk" \) -exec cp {} publish/ \; || true
+
+      - name: Check Results
+        run: |
+          echo "=== Build artifacts for ${{ matrix.platform }} ==="
+          ls -lh publish/
+          if [ -z "$(ls -A publish)" ]; then
+            echo "No artifacts generated"
+            exit 1
+          fi
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: iptest-${{ matrix.platform | replace('/', '_') }}
+          path: publish/          make tools/install -j$(nproc) || make tools/install V=s
           make toolchain/install -j$(nproc) || make toolchain/install V=s
           
           echo ">> 正在编译 iptest..."

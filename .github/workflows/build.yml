@@ -4,7 +4,7 @@ on: [push, pull_request]
 
 jobs:
   build:
-    runs-on: ubuntu-latest  # Keep as 24.04; no need to downgrade
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         platform: ["mediatek/filogic"]  # Add more platforms as needed
@@ -19,11 +19,15 @@ jobs:
           sudo apt-get install -y \
             build-essential ccache curl file g++ gawk gettext git libncurses5-dev \
             libssl-dev ncurses-term openssl python3 python3-setuptools python3-venv \
-            rsync subversion swig time unzip wget zlib1g-dev  # Replace python3-distutils with python3-setuptools
+            rsync subversion swig time unzip wget zlib1g-dev
+
+      - name: Debug Directory Structure
+        run: |
+          ls -la
+          pwd
 
       - name: Compile Packages
         run: |
-          cd src  # Assuming your source is under 'src' based on structure; adjust if needed
           export GOPROXY=https://goproxy.cn,direct
           export GOSUMDB=sum.golang.google.cn
           PLATFORM="${{ matrix.platform }}"
@@ -31,7 +35,7 @@ jobs:
           SUBTARGET=${PLATFORM#*/}
           BUILD_DIR="build-${TARGET}_${SUBTARGET}"
           mkdir -p "$BUILD_DIR"
-          rsync -a --delete ./ "$BUILD_DIR/"
+          rsync -a --delete ./src/package/ "$BUILD_DIR/package/"  # 假设包在 src/package/ 下，调整 rsync 以匹配结构
           cd "$BUILD_DIR"
           # 自动生成 .config
           cat << EOF > .config
@@ -49,12 +53,12 @@ jobs:
             yes "" | make defconfig
             make tools/install -j$(nproc) || make tools/install V=s
             make toolchain/install -j$(nproc) || make toolchain/install V=s
-            make package/iptest/compile V=s -j$(nproc) || make package/iptest/compile V=s  # Adjusted path if not under 'custom'
-            make package/luci-app-iptest/compile V=s -j$(nproc) || true  # Adjusted path if not under 'custom'
+            make package/iptest/compile V=s -j$(nproc) || make package/iptest/compile V=s
+            make package/luci-app-iptest/compile V=s -j$(nproc) || true
           done
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: packages-${{ matrix.platform }}
-          path: build-*/bin/packages/*  # Adjust based on output location
+          path: build-*/bin/packages/*

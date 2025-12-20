@@ -1,13 +1,16 @@
 name: Build OpenWrt Packages
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     strategy:
       matrix:
-        platform: ["mediatek/filogic"] # Add more platforms as needed
+        platform: ["mediatek/filogic"]
 
     steps:
       - name: Checkout Repository
@@ -21,62 +24,81 @@ jobs:
             libssl-dev ncurses-term openssl python3 python3-setuptools python3-venv \
             rsync subversion swig time unzip wget zlib1g-dev
 
-      - name: Debug Custom Directory
+      - name: Debug Custom Package Directory
         run: |
           echo "Verifying custom package source directory:"
-          ls -l custom/ || echo "Error: custom/ directory not found!"
+          ls -l src/package/custom || echo "Error: src/package/custom directory not found!"
+          echo "Custom packages:"
+          find src/package/custom -maxdepth 2 -type d || true
 
       - name: Compile Packages
         run: |
+          set -e
+
           export GOPROXY=https://goproxy.cn,direct
           export GOSUMDB=sum.golang.google.cn
+
           PLATFORM="${{ matrix.platform }}"
-          TARGET=${PLATFORM%/*}
-          SUBTARGET=${PLATFORM#*/}
+          TARGET="${PLATFORM%/*}"
+          SUBTARGET="${PLATFORM#*/}"
           BUILD_DIR="build-${TARGET}_${SUBTARGET}"
-          
-          # 1. 克隆 OpenWrt 源码到构建目录
+
+          echo "Target: $TARGET"
+          echo "Subtarget: $SUBTARGET"
+          echo "Build dir: $BUILD_DIR"
+
+          # 1. 克隆 ImmortalWrt
           mkdir -p "$BUILD_DIR"
-          echo "Cloning immortalwrt into $BUILD_DIR..."
+          echo "Cloning ImmortalWrt..."
           git clone https://github.com/immortalwrt/immortalwrt.git "$BUILD_DIR"
-          
-          # 2. 复制自定义包 (将仓库根目录的 custom 目录整体复制到 OpenWrt 源码树中)
-          echo "Syncing custom packages into the build directory..."
-          
-          # ** 最终修复：将仓库根目录下的 custom/ 目录，完整复制到 OpenWrt 的 package/ 目录下 **
-          # 这与您本地的文件结构 custom/iptest 和 custom/luci-app-iptest 完美匹配。
-          rsync -a --delete custom/ "$BUILD_DIR/package/custom/"
-          
-          # 3. 进入构建目录，继续编译流程
+
+          # 2. 同步自定义包
+          echo "Syncing custom packages..."
+          mkdir -p "$BUILD_DIR/package/custom"
+          rsync -a --delete src/package/custom/ "$BUILD_DIR/package/custom/"
+
+          # 3. 进入构建目录
           cd "$BUILD_DIR"
-          
-          # 自动生成 .config
-          cat << EOF > .config
-          CONFIG_TARGET_$TARGET=y
-          CONFIG_TARGET_${TARGET}_$SUBTARGET=y
+
+          # 4. 生成 .config
+          cat > .config << EOF
+          CONFIG_TARGET_${TARGET}=y
+          CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
           CONFIG_PACKAGE_iptest=m
           CONFIG_PACKAGE_luci-app-iptest=m
           EOF
-          [ "$SUBTARGET" = "filogic" ] && echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_cmcc_rax3000m=y" >> .config
-          
-          # 分别编译 APK 和 IPK
-          for FMT in "apk" "ipk"; do
-            echo "--- Compiling for format: $FMT ---"
+
+          if [ "$SUBTARGET" = "filogic" ]; then
+            echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_cmcc_rax3000m=y" >> .config
+          fi
+
+          # 5. 编译 APK / IPK
+          for FMT in apk ipk; do
+            echo "=============================="
+            echo "Building format: $FMT"
+            echo "=============================="
+
             sed -i '/^CONFIG_PACKAGE_APK/d' .config
             sed -i '/^CONFIG_PACKAGE_IPKG/d' .config
-            [ "$FMT" = "apk" ] && echo "CONFIG_PACKAGE_APK=y" >> .config || echo "CONFIG_PACKAGE_IPKG=y" >> .config
-            
+
+            if [ "$FMT" = "apk" ]; then
+              echo "CONFIG_PACKAGE_APK=y" >> .config
+            else
+              echo "CONFIG_PACKAGE_IPKG=y" >> .config
+            fi
+
             yes "" | make defconfig
-            make tools/install -j$(nproc) || make tools/install V=s
-            make toolchain/install -j$(nproc) || make toolchain/install V=s
-            
-            # 编译自定义包
-            make package/custom/iptest/compile V=s -j$(nproc) || make package/custom/iptest/compile V=s
-            make package/custom/luci-app-iptest/compile V=s -j$(nproc) || true
+
+            make tools/install -j$(nproc)
+            make toolchain/install -j$(nproc)
+
+            make package/custom/iptest/compile -j$(nproc) V=s
+            make package/custom/luci-app-iptest/compile -j$(nproc) V=s || true
           done
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: packages-${{ matrix.platform }}
-          path: build-*/bin/packages/*
+          path: |
+            build-*/bin/packages/*

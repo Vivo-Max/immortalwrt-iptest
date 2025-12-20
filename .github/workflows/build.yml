@@ -10,7 +10,7 @@ jobs:
         platform: ["mediatek/filogic"] # Add more platforms as needed
 
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Install Dependencies
@@ -21,12 +21,10 @@ jobs:
             libssl-dev ncurses-term openssl python3 python3-setuptools python3-venv \
             rsync subversion swig time unzip wget zlib1g-dev
 
-      - name: Debug Directory Structure
+      - name: Debug Custom Directory
         run: |
-          echo "Current working directory (should be repository root):"
-          pwd
           echo "Verifying custom package source directory:"
-          ls -ld src/package/iptest || echo "Error: src/package/iptest not found!"
+          ls -l custom/ || echo "Error: custom/ directory not found!"
 
       - name: Compile Packages
         run: |
@@ -42,21 +40,12 @@ jobs:
           echo "Cloning immortalwrt into $BUILD_DIR..."
           git clone https://github.com/immortalwrt/immortalwrt.git "$BUILD_DIR"
           
-          # 2. 复制自定义包 (在仓库根目录执行 rsync，确保路径正确)
+          # 2. 复制自定义包 (将仓库根目录的 custom 目录整体复制到 OpenWrt 源码树中)
           echo "Syncing custom packages into the build directory..."
           
-          # 创建两个目标目录的父目录，注意：custom/luci-app-iptest 必须存在
-          mkdir -p "$BUILD_DIR/package/custom/iptest"
-          mkdir -p "$BUILD_DIR/package/custom/luci-app-iptest"
-          
-          # ** 核心修复 A：直接将 iptest 整个目录（包括嵌套的 LuCI 包）复制到 custom/iptest/ 目录下 **
-          # 这样可以保证复制成功，即使 luci-app-iptest 目录嵌套在内。
-          rsync -a --delete src/package/iptest/ "$BUILD_DIR/package/custom/iptest/"
-          
-          # ** 核心修复 B：将嵌套的 luci-app-iptest 目录移动到 custom/ 的根目录下 **
-          # 这将实现 OpenWrt 编译系统所需的并列结构：custom/iptest 和 custom/luci-app-iptest
-          echo "Moving nested luci-app-iptest to custom/ root..."
-          mv "$BUILD_DIR/package/custom/iptest/luci-app-iptest" "$BUILD_DIR/package/custom/"
+          # ** 最终修复：将仓库根目录下的 custom/ 目录，完整复制到 OpenWrt 的 package/ 目录下 **
+          # 这与您本地的文件结构 custom/iptest 和 custom/luci-app-iptest 完美匹配。
+          rsync -a --delete custom/ "$BUILD_DIR/package/custom/"
           
           # 3. 进入构建目录，继续编译流程
           cd "$BUILD_DIR"

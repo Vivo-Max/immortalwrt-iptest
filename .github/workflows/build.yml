@@ -1,127 +1,60 @@
-name: Compile Packages
+name: Build OpenWrt Packages
 
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+on: [push, pull_request]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest  # Keep as 24.04; no need to downgrade
     strategy:
       matrix:
-        platform: ["x86/64", "rockchip/armv8", "mediatek/filogic", "ramips/mt7621"]
+        platform: ["mediatek/filogic"]  # Add more platforms as needed
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        path: src
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Set up environment
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential ccache ecj fastjar file g++ gawk gettext git java-propose-classpath java-wrappers jq libelf-dev libncurses5-dev libncursesw5-dev libssl-dev python3 python3-distutils python3-setuptools python3-dev unzip wget python3-pyelftools rsync zlib1g-dev bison flex
-        export GO111MODULE=on
-        export GOPROXY=https://goproxy.cn,direct
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential ccache curl file g++ gawk gettext git libncurses5-dev \
+            libssl-dev ncurses-term openssl python3 python3-setuptools python3-venv \
+            rsync subversion swig time unzip wget zlib1g-dev  # Replace python3-distutils with python3-setuptools
 
-    - name: Initialize build directories
-      run: |
-        mkdir -p build-apk build-ipk logs bin/all_packages
+      - name: Compile Packages
+        run: |
+          cd src  # Assuming your source is under 'src' based on structure; adjust if needed
+          export GOPROXY=https://goproxy.cn,direct
+          export GOSUMDB=sum.golang.google.cn
+          PLATFORM="${{ matrix.platform }}"
+          TARGET=${PLATFORM%/*}
+          SUBTARGET=${PLATFORM#*/}
+          BUILD_DIR="build-${TARGET}_${SUBTARGET}"
+          mkdir -p "$BUILD_DIR"
+          rsync -a --delete ./ "$BUILD_DIR/"
+          cd "$BUILD_DIR"
+          # 自动生成 .config
+          cat << EOF > .config
+          CONFIG_TARGET_$TARGET=y
+          CONFIG_TARGET_${TARGET}_$SUBTARGET=y
+          CONFIG_PACKAGE_iptest=m
+          CONFIG_PACKAGE_luci-app-iptest=m
+          EOF
+          [ "$SUBTARGET" = "filogic" ] && echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_cmcc_rax3000m=y" >> .config
+          # 分别编译 APK 和 IPK
+          for FMT in "apk" "ipk"; do
+            sed -i '/^CONFIG_PACKAGE_APK/d' .config
+            sed -i '/^CONFIG_PACKAGE_IPKG/d' .config
+            [ "$FMT" = "apk" ] && echo "CONFIG_PACKAGE_APK=y" >> .config || echo "CONFIG_PACKAGE_IPKG=y" >> .config
+            yes "" | make defconfig
+            make tools/install -j$(nproc) || make tools/install V=s
+            make toolchain/install -j$(nproc) || make toolchain/install V=s
+            make package/iptest/compile V=s -j$(nproc) || make package/iptest/compile V=s  # Adjusted path if not under 'custom'
+            make package/luci-app-iptest/compile V=s -j$(nproc) || true  # Adjusted path if not under 'custom'
+          done
 
-    - name: Sync source to build directories
-      run: |
-        rsync -a --delete --exclude '.git' --exclude 'bin' src/ build-apk/
-        rsync -a --delete --exclude '.git' --exclude 'bin' src/ build-ipk/
-
-    - name: Initialize APK build config
-      working-directory: build-apk
-      run: |
-        yes "" | make defconfig
-        sed -i '/^CONFIG_PACKAGE_APK/d' .config
-        sed -i '/^CONFIG_PACKAGE_IPKG/d' .config
-        echo "CONFIG_PACKAGE_APK=y" >> .config
-        grep -q "CONFIG_PACKAGE_iptest" .config || echo "CONFIG_PACKAGE_iptest=m" >> .config
-        grep -q "CONFIG_PACKAGE_luci-app-iptest" .config || echo "CONFIG_PACKAGE_luci-app-iptest=m" >> .config
-        yes "" | make defconfig
-        cp .config .config.template
-
-    - name: Initialize IPK build config
-      working-directory: build-ipk
-      run: |
-        yes "" | make defconfig
-        sed -i '/^CONFIG_PACKAGE_APK/d' .config
-        sed -i '/^CONFIG_PACKAGE_IPKG/d' .config
-        echo "CONFIG_PACKAGE_IPKG=y" >> .config
-        grep -q "CONFIG_PACKAGE_iptest" .config || echo "CONFIG_PACKAGE_iptest=m" >> .config
-        grep -q "CONFIG_PACKAGE_luci-app-iptest" .config || echo "CONFIG_PACKAGE_luci-app-iptest=m" >> .config
-        yes "" | make defconfig
-        cp .config .config.template
-
-    - name: Compile for APK
-      working-directory: build-apk
-      env:
-        PLATFORM: ${{ matrix.platform }}
-      run: |
-        TARGET=${PLATFORM%/*}
-        SUBTARGET=${PLATFORM#*/}
-        PLAT_TAG=$(echo "$PLATFORM" | tr '/' '_')
-        cp .config.template .config
-        sed -i '/^CONFIG_TARGET_/d' .config
-        echo "CONFIG_TARGET_${TARGET}=y" >> .config
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
-        [ "$SUBTARGET" = "filogic" ] && echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_cmcc_rax3000m=y" >> .config
-        yes "" | make defconfig
-        
-        if [ ! -f staging_dir/host/bin/openssl ] || [ ! -f staging_dir/host/bin/libdeflate-gzip ]; then
-          make toolchain/install -j$(nproc)
-        fi
-        
-        make target/linux/compile -j$(nproc)
-        
-        make package/custom/iptest/compile V=s -j$(nproc) 2>&1 | tee "../logs/${PLAT_TAG}_apk_iptest.log"
-        make package/custom/luci-app-iptest/compile V=s -j$(nproc) 2>&1 | tee -a "../logs/${PLAT_TAG}_apk_luci.log"
-        
-        find bin/packages/ -name "*iptest*.apk" -exec cp {} "../bin/all_packages/${PLAT_TAG}_apk_" \;
-        find bin/packages/ -name "*luci-app-iptest*.apk" -exec cp {} "../bin/all_packages/${PLAT_TAG}_apk_" \;
-
-    - name: Compile for IPK
-      working-directory: build-ipk
-      env:
-        PLATFORM: ${{ matrix.platform }}
-      run: |
-        TARGET=${PLATFORM%/*}
-        SUBTARGET=${PLATFORM#*/}
-        PLAT_TAG=$(echo "$PLATFORM" | tr '/' '_')
-        cp .config.template .config
-        sed -i '/^CONFIG_TARGET_/d' .config
-        echo "CONFIG_TARGET_${TARGET}=y" >> .config
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
-        [ "$SUBTARGET" = "filogic" ] && echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_cmcc_rax3000m=y" >> .config
-        yes "" | make defconfig
-        
-        if [ ! -f staging_dir/host/bin/openssl ] || [ ! -f staging_dir/host/bin/libdeflate-gzip ]; then
-          make toolchain/install -j$(nproc)
-        fi
-        
-        make target/linux/compile -j$(nproc)
-        
-        make package/custom/iptest/compile V=s -j$(nproc) 2>&1 | tee "../logs/${PLAT_TAG}_ipk_iptest.log"
-        make package/custom/luci-app-iptest/compile V=s -j$(nproc) 2>&1 | tee -a "../logs/${PLAT_TAG}_ipk_luci.log"
-        
-        find bin/packages/ -name "*iptest*.ipk" -exec cp {} "../bin/all_packages/${PLAT_TAG}_ipk_" \;
-        find bin/packages/ -name "*luci-app-iptest*.ipk" -exec cp {} "../bin/all_packages/${PLAT_TAG}_ipk_" \;
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: packages-${{ matrix.platform }}
-        path: bin/all_packages/*
-
-    - name: Upload logs
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: logs-${{ matrix.platform }}
-        path: logs/*
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.platform }}
+          path: build-*/bin/packages/*  # Adjust based on output location

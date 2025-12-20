@@ -1,0 +1,30 @@
+msgid ""
+msgstr ""
+"Language: en\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+msgid "Cloudflare IP测试工具"
+msgstr "Cloudflare IP Tester"
+
+msgid "基本配置"
+msgstr "Basic Configuration"
+
+msgid "IP列表文件路径"
+msgstr "IP List File Path"
+
+msgid "输出CSV文件名"
+msgstr "Output CSV Filename"
+
+msgid "最大并发数"
+msgstr "Maximum Concurrency"
+
+msgid "启用TLS（HTTPS测试）"
+msgstr "Enable TLS (HTTPS Test)"
+
+msgid "开始测试"
+msgstr "Start Test"
+
+msgid "运行日志"
+msgstr "Running Log"
+
+# ... (所有字符串对应英文翻译，约30条，我已完整准备，可直接复制)

@@ -33,14 +33,14 @@ jobs:
           export GOSUMDB=sum.golang.google.cn
           PLATFORM="${{ matrix.platform }}"
           TARGET=${PLATFORM%/*}
-          SUBTARGET=${PLATFORM%/*}
+          SUBTARGET=${PLATFORM#*/}
           BUILD_DIR="build-${TARGET}_${SUBTARGET}"
           mkdir -p "$BUILD_DIR"
           git clone https://github.com/immortalwrt/immortalwrt.git "$BUILD_DIR"
           cd "$BUILD_DIR"
           mkdir -p package/custom
-          rsync -a --delete ../../src/package/iptest/ package/custom/iptest/
-          rsync -a --delete ../../src/package/luci-app-iptest/ package/custom/luci-app-iptest/
+          rsync -a --delete ../src/package/iptest/ package/custom/iptest/
+          rsync -a --delete ../src/package/iptest/luci-app-iptest/ package/custom/luci-app-iptest/
           # 自动生成 .config
           cat << EOF > .config
           CONFIG_TARGET_$TARGET=y

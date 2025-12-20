@@ -45,18 +45,16 @@ jobs:
           # 2. 复制自定义包 (在仓库根目录执行 rsync，确保路径正确)
           echo "Syncing custom packages into the build directory..."
           
-          # 为 iptest 及其 luCi app 创建目标目录
-          # **注意：mkdir -p 会自动创建 custom 目录**
+          # 为 iptest 及其 luCi app 创建目标目录 (会同时创建 custom 目录)
           mkdir -p "$BUILD_DIR/package/custom/iptest"
           mkdir -p "$BUILD_DIR/package/custom/luci-app-iptest"
           
-          # **重要修复 A：复制 iptest 主体，并排除嵌套的 luci-app-iptest 目录**
-          # 确保 iptest 目录下只包含 iptest 自身的 Makefile、go.mod、po/ 等文件。
+          # ** 核心修复 A：复制 iptest 主体，并排除嵌套的 luci-app-iptest 目录 **
+          # 这样 custom/iptest/ 目录下将不包含 LuCI 包。
           rsync -a --delete --exclude 'luci-app-iptest/' src/package/iptest/ "$BUILD_DIR/package/custom/iptest/"
           
-          # **重要修复 B：将嵌套的 luci-app-iptest 目录单独复制到 package/custom/ 下**
-          # 源路径：src/package/iptest/luci-app-iptest/
-          # 目标路径：$BUILD_DIR/package/custom/luci-app-iptest/ (实现并列存放)
+          # ** 核心修复 B：将嵌套的 luci-app-iptest 目录单独复制到 package/custom/ 下 **
+          # 这样 custom/luci-app-iptest/ 目录下才是 LuCI 包的内容，实现了并列存放。
           rsync -a --delete src/package/iptest/luci-app-iptest/ "$BUILD_DIR/package/custom/luci-app-iptest/"
           
           # 3. 进入构建目录，继续编译流程

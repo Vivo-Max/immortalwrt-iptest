@@ -23,9 +23,10 @@ jobs:
 
       - name: Debug Directory Structure
         run: |
-          ls -la
+          echo "Current working directory (should be repository root):"
           pwd
-          ls -la src/package || echo "src/package not found"
+          echo "Verifying custom package source directory:"
+          ls -ld src/package/iptest || echo "Error: src/package/iptest not found!"
 
       - name: Compile Packages
         run: |
@@ -35,12 +36,26 @@ jobs:
           TARGET=${PLATFORM%/*}
           SUBTARGET=${PLATFORM#*/}
           BUILD_DIR="build-${TARGET}_${SUBTARGET}"
+          
+          # 1. 克隆 OpenWrt 源码到构建目录
           mkdir -p "$BUILD_DIR"
+          echo "Cloning immortalwrt into $BUILD_DIR..."
           git clone https://github.com/immortalwrt/immortalwrt.git "$BUILD_DIR"
+          
+          # 2. 复制自定义包 (在仓库根目录执行 rsync，确保路径正确)
+          echo "Syncing custom packages into the build directory..."
+          
+          # 为 iptest 及其 luCi app 创建目标目录
+          mkdir -p "$BUILD_DIR/package/custom/iptest"
+          mkdir -p "$BUILD_DIR/package/custom/luci-app-iptest"
+          
+          # 修复后的 rsync 命令：源路径不再使用 "../"，目标路径是明确的 BUILD_DIR
+          rsync -a --delete src/package/iptest/ "$BUILD_DIR/package/custom/iptest/"
+          rsync -a --delete src/package/iptest/luci-app-iptest/ "$BUILD_DIR/package/custom/luci-app-iptest/"
+          
+          # 3. 进入构建目录，继续编译流程
           cd "$BUILD_DIR"
-          mkdir -p package/custom
-          rsync -a --delete ../src/package/iptest/ package/custom/iptest/
-          rsync -a --delete ../src/package/iptest/luci-app-iptest/ package/custom/luci-app-iptest/
+          
           # 自动生成 .config
           cat << EOF > .config
           CONFIG_TARGET_$TARGET=y
@@ -49,14 +64,19 @@ jobs:
           CONFIG_PACKAGE_luci-app-iptest=m
           EOF
           [ "$SUBTARGET" = "filogic" ] && echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_cmcc_rax3000m=y" >> .config
+          
           # 分别编译 APK 和 IPK
           for FMT in "apk" "ipk"; do
+            echo "--- Compiling for format: $FMT ---"
             sed -i '/^CONFIG_PACKAGE_APK/d' .config
             sed -i '/^CONFIG_PACKAGE_IPKG/d' .config
             [ "$FMT" = "apk" ] && echo "CONFIG_PACKAGE_APK=y" >> .config || echo "CONFIG_PACKAGE_IPKG=y" >> .config
+            
             yes "" | make defconfig
             make tools/install -j$(nproc) || make tools/install V=s
             make toolchain/install -j$(nproc) || make toolchain/install V=s
+            
+            # 编译自定义包
             make package/custom/iptest/compile V=s -j$(nproc) || make package/custom/iptest/compile V=s
             make package/custom/luci-app-iptest/compile V=s -j$(nproc) || true
           done

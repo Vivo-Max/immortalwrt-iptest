@@ -1,21 +1,16 @@
 name: Build OpenWrt Packages
-
 on:
   push:
   pull_request:
-
 jobs:
   build:
     runs-on: ubuntu-latest
-
     strategy:
       matrix:
         platform: ["mediatek/filogic"]
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
       - name: Install Dependencies
         run: |
           sudo apt-get update
@@ -23,43 +18,38 @@ jobs:
             build-essential ccache curl file g++ gawk gettext git libncurses5-dev \
             libssl-dev ncurses-term openssl python3 python3-setuptools python3-venv \
             rsync subversion swig time unzip wget zlib1g-dev
-
       - name: Debug Custom Package Directory
         run: |
           echo "Verifying custom package source directory:"
           ls -l src/package/custom || echo "Error: src/package/custom directory not found!"
           echo "Custom packages:"
           find src/package/custom -maxdepth 2 -type d || true
-
       - name: Compile Packages
         run: |
           set -e
-
           export GOPROXY=https://goproxy.cn,direct
           export GOSUMDB=sum.golang.google.cn
-
           PLATFORM="${{ matrix.platform }}"
           TARGET="${PLATFORM%/*}"
           SUBTARGET="${PLATFORM#*/}"
           BUILD_DIR="build-${TARGET}_${SUBTARGET}"
-
           echo "Target: $TARGET"
           echo "Subtarget: $SUBTARGET"
           echo "Build dir: $BUILD_DIR"
-
           # 1. 克隆 ImmortalWrt
           mkdir -p "$BUILD_DIR"
           echo "Cloning ImmortalWrt..."
           git clone https://github.com/immortalwrt/immortalwrt.git "$BUILD_DIR"
-
           # 2. 同步自定义包
           echo "Syncing custom packages..."
           mkdir -p "$BUILD_DIR/package/custom"
           rsync -a --delete src/package/custom/ "$BUILD_DIR/package/custom/"
-
           # 3. 进入构建目录
           cd "$BUILD_DIR"
-
+          # 新增：更新和安装feeds（确保golang-package.mk可用）
+          echo "Updating and installing feeds..."
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
           # 4. 生成 .config
           cat > .config << EOF
           CONFIG_TARGET_${TARGET}=y
@@ -67,35 +57,27 @@ jobs:
           CONFIG_PACKAGE_iptest=m
           CONFIG_PACKAGE_luci-app-iptest=m
           EOF
-
           if [ "$SUBTARGET" = "filogic" ]; then
             echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_cmcc_rax3000m=y" >> .config
           fi
-
           # 5. 编译 APK / IPK
           for FMT in apk ipk; do
             echo "=============================="
             echo "Building format: $FMT"
             echo "=============================="
-
             sed -i '/^CONFIG_PACKAGE_APK/d' .config
             sed -i '/^CONFIG_PACKAGE_IPKG/d' .config
-
             if [ "$FMT" = "apk" ]; then
               echo "CONFIG_PACKAGE_APK=y" >> .config
             else
               echo "CONFIG_PACKAGE_IPKG=y" >> .config
             fi
-
-            yes "" | make defconfig
-
+            make defconfig  # 现在feeds已更新，defconfig会扩展.config
             make tools/install -j$(nproc)
             make toolchain/install -j$(nproc)
-
             make package/custom/iptest/compile -j$(nproc) V=s
             make package/custom/luci-app-iptest/compile -j$(nproc) V=s || true
           done
-
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:

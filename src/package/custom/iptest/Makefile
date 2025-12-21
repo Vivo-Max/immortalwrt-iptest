@@ -15,8 +15,11 @@ PKG_LICENSE_FILES:=LICENSE
 
 PKG_BUILD_DEPENDS:=golang/host
 
+# Go module 路径（必须和 go.mod 的 module 完全一致）
 GO_PKG:=github.com/youruser/iptest
-GO_PKG_BUILD_PKG:=./cmd/iptest
+
+# main.go 在仓库根目录
+GO_PKG_BUILD_PKG:=.
 
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 include $(INCLUDE_DIR)/package.mk
@@ -24,7 +27,7 @@ include $(INCLUDE_DIR)/package.mk
 define Package/iptest
   SECTION:=net
   CATEGORY:=Network
-  TITLE:=iptest - IP Test Tool
+  TITLE:=IP Test Tool
 endef
 
 define Package/iptest/description

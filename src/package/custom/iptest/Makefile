@@ -4,36 +4,37 @@ PKG_NAME:=iptest
 PKG_VERSION:=1.2
 PKG_RELEASE:=1
 
-include $(INCLUDE_DIR)/package.mk
+PKG_SOURCE_PROTO:=git
+PKG_SOURCE_URL:=https://github.com/youruser/iptest.git
+PKG_SOURCE_VERSION:=HEAD
+
+PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
+
+PKG_LICENSE:=MIT
+PKG_LICENSE_FILES:=LICENSE
+
+PKG_BUILD_DEPENDS:=golang/host
+
+GO_PKG:=github.com/youruser/iptest
+GO_PKG_BUILD_PKG:=./cmd/iptest
+
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
+include $(INCLUDE_DIR)/package.mk
 
 define Package/iptest
   SECTION:=net
   CATEGORY:=Network
   TITLE:=iptest - IP Test Tool
-  # DEPENDS:= +libpthread  # 如果有依赖，取消注释并调整
 endef
 
 define Package/iptest/description
-  A simple IP testing tool written in Go.
-endef
-
-define Build/Prepare
-	$(call Build/Prepare/Default)
-	# 假设源代码在包目录的 src/ 下，复制到构建目录
-	mkdir -p $(PKG_BUILD_DIR)
-	cp -r $(PKG_BUILD_DIR)/../src/* $(PKG_BUILD_DIR)/ || true  # 调整为您的源路径
-endef
-
-define Build/Compile
-	$(call GoPackage/Build/Compile)
+A simple IP testing tool written in Go.
 endef
 
 define Package/iptest/install
-	$(call GoPackage/Package/Install/Bin,$(1))
+	$(INSTALL_DIR) $(1)/usr/bin
+	$(INSTALL_BIN) $(GO_PKG_BUILD_BIN_DIR)/iptest $(1)/usr/bin/
 endef
 
-GO_PKG:=iptest  # 如果是 GitHub 仓库，改为 github.com/youruser/iptest
-
-$(eval $(call GoPackage,iptest))
+$(eval $(call GoBinPackage,iptest))
 $(eval $(call BuildPackage,iptest))

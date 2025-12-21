@@ -5,20 +5,21 @@ PKG_VERSION:=1.2
 PKG_RELEASE:=1
 
 PKG_SOURCE_PROTO:=git
-PKG_SOURCE_URL:=https://github.com/youruser/iptest.git
+PKG_SOURCE_URL:=https://github.com/Vivo-Max/immortalwrt-iptest.git
 PKG_SOURCE_VERSION:=HEAD
+PKG_SOURCE_SUBDIR:=$(PKG_NAME)
 
-PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
+PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_SOURCE_SUBDIR)
 
 PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
 
 PKG_BUILD_DEPENDS:=golang/host
 
-# Go module 路径（必须和 go.mod 的 module 完全一致）
-GO_PKG:=github.com/youruser/iptest
+# Go Module path must match go.mod
+GO_PKG:=github.com/Vivo-Max/immortalwrt-iptest/src/package/custom/iptest
 
-# main.go 在仓库根目录
+# main.go is in root of the Go module
 GO_PKG_BUILD_PKG:=.
 
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk

@@ -1,4 +1,4 @@
-module github.com/Vivo-Max/immortalwrt-iptest/src/package/custom/iptest
+module github.com/Vivo-Max/immortalwrt-iptest/iptest
 
 go 1.22
 

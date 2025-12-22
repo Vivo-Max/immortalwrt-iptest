@@ -1,86 +1,148 @@
-name: Build OpenWrt Packages
+name: Build OpenWrt Custom Packages
+
 on:
   push:
   pull_request:
+
 jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        platform: ["mediatek/filogic"]
+        format: [apk, ipk]       # 构建格式，可选 apk/ipk
+        package: [all]           # 可选择单个包或 all
+        platform:                 # 支持多平台，按 TARGET/SUBTARGET/DEVICE
+          - "mediatek/filogic/mediatek_filogic_DEVICE_cmcc_rax3000m"
+          - "rockchip/rk3588/orangepi5plus"
+          - "x86/x86_64/x86_64_generic"
+
     steps:
-      - name: Checkout Repository
+      # ---------------------------
+      # 1. 检出仓库
+      # ---------------------------
+      - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Install Dependencies
+
+      # ---------------------------
+      # 2. 安装构建依赖
+      # ---------------------------
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential ccache curl file g++ gawk gettext git libncurses5-dev \
-            libssl-dev ncurses-term openssl python3 python3-setuptools python3-venv \
-            rsync subversion swig time unzip wget zlib1g-dev
-      - name: Debug Custom Package Directory
+            build-essential ccache curl file g++ gawk gettext git \
+            libncurses5-dev libssl-dev ncurses-term openssl \
+            python3 python3-setuptools python3-venv rsync subversion \
+            swig time unzip wget zlib1g-dev
+
+      # ---------------------------
+      # 3. 设置环境变量
+      # ---------------------------
+      - name: Set environment
         run: |
-          echo "Verifying custom package source directory:"
-          ls -l src/package/custom || echo "Error: src/package/custom directory not found!"
-          echo "Custom packages:"
-          find src/package/custom -maxdepth 2 -type d || true
-      - name: Compile Packages
-        run: |
-          set -e
+          export USE_CCACHE=1
           export GOPROXY=https://goproxy.cn,direct
           export GOSUMDB=sum.golang.google.cn
+
+      # ---------------------------
+      # 4. 构建包
+      # ---------------------------
+      - name: Build packages
+        run: |
+          set -e
+
+          FORMAT="${{ matrix.format }}"
+          PACKAGE="${{ matrix.package }}"
           PLATFORM="${{ matrix.platform }}"
-          TARGET="${PLATFORM%/*}"
-          SUBTARGET="${PLATFORM#*/}"
-          BUILD_DIR="build-${TARGET}_${SUBTARGET}"
-          echo "Target: $TARGET"
-          echo "Subtarget: $SUBTARGET"
-          echo "Build dir: $BUILD_DIR"
-          # 1. 克隆 ImmortalWrt
-          mkdir -p "$BUILD_DIR"
-          echo "Cloning ImmortalWrt..."
-          git clone https://github.com/immortalwrt/immortalwrt.git "$BUILD_DIR"
-          # 2. 同步自定义包
-          echo "Syncing custom packages..."
-          mkdir -p "$BUILD_DIR/package/custom"
-          rsync -a --delete src/package/custom/ "$BUILD_DIR/package/custom/"
-          # 3. 进入构建目录
-          cd "$BUILD_DIR"
-          # 新增：更新和安装feeds（确保golang-package.mk可用）
-          echo "Updating and installing feeds..."
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          # 4. 生成 .config
-          cat > .config << EOF
-          CONFIG_TARGET_${TARGET}=y
-          CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
-          CONFIG_PACKAGE_iptest=m
-          CONFIG_PACKAGE_luci-app-iptest=m
-          EOF
-          if [ "$SUBTARGET" = "filogic" ]; then
-            echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_cmcc_rax3000m=y" >> .config
+
+          echo "==> Build format: $FORMAT"
+          echo "==> Package: $PACKAGE"
+          echo "==> Platform: $PLATFORM"
+
+          IMMORTALWRT_REPO="https://github.com/immortalwrt/immortalwrt.git"
+          CUSTOM_PACKAGE_DIR="src/package/custom"
+          ALL_PACKAGES=("iptest" "luci-app-iptest")
+
+          # 解析平台信息
+          IFS="/" read -r TARGET SUBTARGET DEVICE <<< "$PLATFORM"
+
+          # 确定构建包
+          if [ "$PACKAGE" != "all" ]; then
+              PACKAGES=("$PACKAGE")
+          else
+              PACKAGES=("${ALL_PACKAGES[@]}")
           fi
-          # 5. 编译 APK / IPK
-          for FMT in apk ipk; do
-            echo "=============================="
-            echo "Building format: $FMT"
-            echo "=============================="
-            sed -i '/^CONFIG_PACKAGE_APK/d' .config
-            sed -i '/^CONFIG_PACKAGE_IPKG/d' .config
-            if [ "$FMT" = "apk" ]; then
+
+          ARTIFACT_DIR="artifacts/${TARGET}_${SUBTARGET}_${DEVICE}/${FORMAT}"
+          BUILD_DIR="build-${TARGET}_${SUBTARGET}_${DEVICE}-${FORMAT}"
+
+          mkdir -p "$ARTIFACT_DIR"
+
+          # ---------------------------
+          # 准备构建目录（缓存复用）
+          # ---------------------------
+          if [ ! -d "$BUILD_DIR" ]; then
+              echo "==> Cloning ImmortalWrt for $PLATFORM"
+              git clone "$IMMORTALWRT_REPO" "$BUILD_DIR"
+              rsync -a "$CUSTOM_PACKAGE_DIR/" "$BUILD_DIR/package/custom/"
+              pushd "$BUILD_DIR"
+
+              ./scripts/feeds update -a
+              ./scripts/feeds install -a
+
+              # 自动生成 .config
+              cat > .config << EOF
+CONFIG_TARGET_${TARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+CONFIG_TARGET_DEVICE_${DEVICE}=y
+EOF
+              for pkg in "${PACKAGES[@]}"; do
+                  echo "CONFIG_PACKAGE_${pkg}=m" >> .config
+              done
+              make defconfig
+          else
+              pushd "$BUILD_DIR"
+              echo "==> Using cached build dir: $BUILD_DIR"
+          fi
+
+          # ---------------------------
+          # 设置包格式
+          # ---------------------------
+          if [ "$FORMAT" = "apk" ]; then
               echo "CONFIG_PACKAGE_APK=y" >> .config
-            else
+              sed -i '/^CONFIG_PACKAGE_IPKG/d' .config
+          else
               echo "CONFIG_PACKAGE_IPKG=y" >> .config
-            fi
-            make defconfig  # 现在feeds已更新，defconfig会扩展.config
-            make tools/install -j$(nproc)
-            make toolchain/install -j$(nproc)
-            make package/custom/iptest/compile -j$(nproc) V=s
-            make package/custom/luci-app-iptest/compile -j$(nproc) V=s || true
+              sed -i '/^CONFIG_PACKAGE_APK/d' .config
+          fi
+          make defconfig
+
+          # ---------------------------
+          # 安装工具链 / golang host
+          # ---------------------------
+          make tools/install -j$(nproc)
+          make toolchain/install -j$(nproc)
+          make package/golang/host/compile -j$(nproc)
+
+          # ---------------------------
+          # 编译自定义插件（增量编译）
+          # ---------------------------
+          for pkg in "${PACKAGES[@]}"; do
+              make "package/custom/$pkg/compile" -j$(nproc) V=s || true
           done
-      - name: Upload Artifacts
+
+          # ---------------------------
+          # 收集产物
+          # ---------------------------
+          find bin/packages -type f -name "*.$FORMAT" -exec cp {} "../../$ARTIFACT_DIR/" \;
+
+          popd
+
+      # ---------------------------
+      # 5. 上传产物
+      # ---------------------------
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: packages-${{ matrix.platform }}
-          path: |
-            build-*/bin/packages/*
+          name: openwrt-packages
+          path: artifacts/

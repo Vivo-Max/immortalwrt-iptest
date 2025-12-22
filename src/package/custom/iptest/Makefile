@@ -16,14 +16,21 @@ PKG_LICENSE_FILES:=LICENSE
 
 PKG_BUILD_DEPENDS:=golang/host
 
-# Go Module path must match go.mod
-GO_PKG:=github.com/Vivo-Max/immortalwrt-iptest/src/package/custom/iptest
+# ===== 关键修正点 =====
+# 必须和 go.mod 里的 module 一致
+GO_PKG:=iptest
 
-# main.go is in root of the Go module
+# main.go 在 module 根目录
 GO_PKG_BUILD_PKG:=.
 
-include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
+# 生成的二进制名
+GO_PKG_BUILD_BIN:=iptest
+
+# 如果不需要 CGO，强烈建议关闭
+GO_PKG_ENABLE_CGO:=0
+
 include $(INCLUDE_DIR)/package.mk
+include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
 define Package/iptest
   SECTION:=net
@@ -36,9 +43,8 @@ A simple IP testing tool written in Go.
 endef
 
 define Package/iptest/install
-	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) $(GO_PKG_BUILD_BIN_DIR)/iptest $(1)/usr/bin/
+	$(call GoPackage/Package/Install/Bin,$(1))
 endef
 
-$(eval $(call GoBinPackage,iptest))
+$(eval $(call GoPackage,iptest))
 $(eval $(call BuildPackage,iptest))

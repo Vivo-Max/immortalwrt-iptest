@@ -22,7 +22,7 @@ define Package/iptest
   SECTION:=net
   CATEGORY:=Network
   TITLE:=IP Test Tool
-  DEPENDS:=$(GO_ARCH_DEPENDS) +luci-base +luci-compat +luci-mod-admin-full +po2lmo  # 添加LuCI依赖和po2lmo（用于po编译）
+  DEPENDS:=$(GO_ARCH_DEPENDS) +luci-base +luci-compat +luci-mod-admin-full +po2lmo
 endef
 
 define Package/iptest/description
@@ -41,10 +41,8 @@ define Build/Prepare
 endef
 
 define Build/Compile
-	# 先编译Go二进制
+	# 只编译Go二进制（po转换移到install中，手动处理）
 	$(call GoPackage/Build/Compile)
-	# 运行po/Makefile编译po文件（生成mo文件）
-	$(MAKE) -C $(PKG_BUILD_DIR)/luci-app-iptest/files/po
 endef
 
 define Package/iptest/install
@@ -62,9 +60,14 @@ define Package/iptest/install
 	# 安装配置文件
 	$(INSTALL_DIR) $(1)/etc/config
 	$(CP) $(PKG_BUILD_DIR)/luci-app-iptest/files/root/etc/config/iptest $(1)/etc/config/
-	# 安装i18n mo文件（假设po/Makefile生成在po目录下）
+	# 手动转换并安装i18n mo文件（使用po2lmo工具，避免依赖po/Makefile）
 	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/i18n
-	$(CP) $(PKG_BUILD_DIR)/luci-app-iptest/files/po/*.mo $(1)/usr/lib/lua/luci/i18n/
+	for po in $(PKG_BUILD_DIR)/luci-app-iptest/files/po/*.po; do \
+		if [ -f "$$po" ]; then \
+			mo=$$(basename $$po .po).mo; \
+			$(STAGING_DIR_HOST)/bin/po2lmo $$po $(1)/usr/lib/lua/luci/i18n/$$mo; \
+		fi; \
+	done
 endef
 
 $(eval $(call GoBinPackage,iptest))

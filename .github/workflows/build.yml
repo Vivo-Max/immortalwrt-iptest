@@ -113,7 +113,13 @@ jobs:
               echo "CONFIG_PACKAGE_${pkg}=m" >> .config
             done
 
+            # 运行 make defconfig 生成 .config 文件
             make defconfig
+
+            # ---------------------------
+            # 调试：输出 .config 文件内容
+            # ---------------------------
+            cat .config || echo "Error: .config file is missing!"
           else
             pushd "$BUILD_DIR"
             echo "==> Using cached build dir"

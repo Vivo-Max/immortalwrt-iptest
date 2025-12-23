@@ -1,96 +1,163 @@
-- name: Build packages
-  run: |
-    set -e
+name: Build OpenWrt Custom Packages
 
-    FORMAT="${{ matrix.format }}"
-    PACKAGE="${{ matrix.package }}"
-    PLATFORM="${{ matrix.platform }}"
+on:
+  push:
+  pull_request:
 
-    echo "==> Build format: $FORMAT"
-    echo "==> Package: $PACKAGE"
-    echo "==> Platform: $PLATFORM"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 2   # 防止 6 小时超时
+      matrix:
+        format: [apk, ipk]
+        package: [all]
+        platform:
+          - "mediatek/filogic/mediatek_filogic_DEVICE_cmcc_rax3000m"
+          - "rockchip/rk3588/orangepi5plus"
+          - "x86/x86_64/x86_64_generic"
 
-    IMMORTALWRT_REPO="https://github.com/immortalwrt/immortalwrt.git"
-    CUSTOM_PACKAGE_DIR="src/package/custom"
-    ALL_PACKAGES=("iptest" "luci-app-iptest")
-
-    IFS="/" read -r TARGET SUBTARGET DEVICE <<< "$PLATFORM"
-
-    if [ "$PACKAGE" != "all" ]; then
-      PACKAGES=("$PACKAGE")
-    else
-      PACKAGES=("${ALL_PACKAGES[@]}")
-    fi
-
-    ARTIFACT_DIR="artifacts/${TARGET}_${SUBTARGET}_${DEVICE}/${FORMAT}"
-    BUILD_DIR="build-${PLATFORM}-${FORMAT}"
-
-    mkdir -p "$ARTIFACT_DIR"
-
-    # ---------------------------
-    # 准备构建目录
-    # ---------------------------
-    if [ ! -d "$BUILD_DIR" ]; then
-      echo "==> Cloning ImmortalWrt"
-      git clone --depth=1 "$IMMORTALWRT_REPO" "$BUILD_DIR"
-      rsync -a "$CUSTOM_PACKAGE_DIR/" "$BUILD_DIR/package/custom/"
-
-      pushd "$BUILD_DIR"
-
-      ./scripts/feeds update -a
-      ./scripts/feeds install -a
-
-      echo "CONFIG_TARGET_${TARGET}=y" > .config
-      echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
-      echo "CONFIG_TARGET_DEVICE_${DEVICE}=y" >> .config
-
-      for pkg in "${PACKAGES[@]}"; do
-        echo "CONFIG_PACKAGE_${pkg}=m" >> .config
-      done
-
-      # 运行 make defconfig 生成 .config 文件
-      make defconfig
+    steps:
+      # ---------------------------
+      # 1. 检出仓库
+      # ---------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       # ---------------------------
-      # 调试：输出 .config 文件内容
+      # 2. 安装构建依赖（修复 pyelftools）
       # ---------------------------
-      cat .config || echo "Error: .config file is missing!"
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential ccache curl file g++ gawk gettext git \
+            libncurses-dev libssl-dev ncurses-term openssl \
+            python3 python3-dev python3-setuptools python3-venv python3-pyelftools \
+            rsync subversion swig time unzip wget zlib1g-dev
 
-    else
-      pushd "$BUILD_DIR"
-      echo "==> Using cached build dir"
-    fi
+      # ---------------------------
+      # 3. 设置环境变量
+      # ---------------------------
+      - name: Set environment
+        run: |
+          echo "USE_CCACHE=1" >> $GITHUB_ENV
+          echo "GOPROXY=https://goproxy.cn,direct" >> $GITHUB_ENV
+          echo "GOSUMDB=sum.golang.google.cn" >> $GITHUB_ENV
 
-    # ---------------------------
-    # 包格式切换
-    # ---------------------------
-    if [ "$FORMAT" = "apk" ]; then
-      echo "CONFIG_PACKAGE_APK=y" >> .config
-      sed -i '/^CONFIG_PACKAGE_IPKG/d' .config
-    else
-      echo "CONFIG_PACKAGE_IPKG=y" >> .config
-      sed -i '/^CONFIG_PACKAGE_APK/d' .config
-    fi
+      # ---------------------------
+      # 4. 缓存 OpenWrt 工具链（关键提速）
+      # ---------------------------
+      - name: Cache OpenWrt toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/build-${{ matrix.platform }}-${{ matrix.format }}/dl
+            ${{ github.workspace }}/build-${{ matrix.platform }}-${{ matrix.format }}/build_dir/host
+            ${{ github.workspace }}/build-${{ matrix.platform }}-${{ matrix.format }}/build_dir/toolchain-*
+            ${{ github.workspace }}/build-${{ matrix.platform }}-${{ matrix.format }}/staging_dir
+          key: openwrt-${{ matrix.platform }}-${{ matrix.format }}-v1
+          restore-keys: |
+            openwrt-${{ matrix.platform }}-${{ matrix.format }}-
 
-    make defconfig
+      # ---------------------------
+      # 5. 构建包
+      # ---------------------------
+      - name: Build packages
+        run: |
+          set -e
 
-    # ---------------------------
-    # 工具链 / golang（可命中缓存）
-    # ---------------------------
-    make tools/install -j$(nproc)
-    make toolchain/install -j$(nproc)
-    make package/golang/host/compile -j$(nproc)
+          FORMAT="${{ matrix.format }}"
+          PACKAGE="${{ matrix.package }}"
+          PLATFORM="${{ matrix.platform }}"
 
-    # ---------------------------
-    # 编译自定义包（失败不中断）
-    # ---------------------------
-    for pkg in "${PACKAGES[@]}"; do
-      make "package/custom/$pkg/compile" -j$(nproc) V=s || true
-    done
+          echo "==> Build format: $FORMAT"
+          echo "==> Package: $PACKAGE"
+          echo "==> Platform: $PLATFORM"
 
-    # ---------------------------
-    # 收集产物
-    # ---------------------------
-    find bin/packages -type f -name "*.$FORMAT" -exec cp {} "../../$ARTIFACT_DIR/" \;
+          IMMORTALWRT_REPO="https://github.com/immortalwrt/immortalwrt.git"
+          CUSTOM_PACKAGE_DIR="src/package/custom"
+          ALL_PACKAGES=("iptest" "luci-app-iptest")
 
-    popd
+          IFS="/" read -r TARGET SUBTARGET DEVICE <<< "$PLATFORM"
+
+          if [ "$PACKAGE" != "all" ]; then
+            PACKAGES=("$PACKAGE")
+          else
+            PACKAGES=("${ALL_PACKAGES[@]}")
+          fi
+
+          ARTIFACT_DIR="artifacts/${TARGET}_${SUBTARGET}_${DEVICE}/${FORMAT}"
+          BUILD_DIR="build-${PLATFORM}-${FORMAT}"
+
+          mkdir -p "$ARTIFACT_DIR"
+
+          # ---------------------------
+          # 准备构建目录
+          # ---------------------------
+          if [ ! -d "$BUILD_DIR" ]; then
+            echo "==> Cloning ImmortalWrt"
+            git clone --depth=1 "$IMMORTALWRT_REPO" "$BUILD_DIR"
+            rsync -a "$CUSTOM_PACKAGE_DIR/" "$BUILD_DIR/package/custom/"
+
+            pushd "$BUILD_DIR"
+
+            ./scripts/feeds update -a
+            ./scripts/feeds install -a
+
+            echo "CONFIG_TARGET_${TARGET}=y" > .config
+            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
+            echo "CONFIG_TARGET_DEVICE_${DEVICE}=y" >> .config
+
+            for pkg in "${PACKAGES[@]}"; do
+              echo "CONFIG_PACKAGE_${pkg}=m" >> .config
+            done
+
+            make defconfig
+          else
+            pushd "$BUILD_DIR"
+            echo "==> Using cached build dir"
+          fi
+
+          # ---------------------------
+          # 包格式切换
+          # ---------------------------
+          if [ "$FORMAT" = "apk" ]; then
+            echo "CONFIG_PACKAGE_APK=y" >> .config
+            sed -i '/^CONFIG_PACKAGE_IPKG/d' .config
+          else
+            echo "CONFIG_PACKAGE_IPKG=y" >> .config
+            sed -i '/^CONFIG_PACKAGE_APK/d' .config
+          fi
+
+          make defconfig
+
+          # ---------------------------
+          # 工具链 / golang（可命中缓存）
+          # ---------------------------
+          make tools/install -j$(nproc)
+          make toolchain/install -j$(nproc)
+          make package/golang/host/compile -j$(nproc)
+
+          # ---------------------------
+          # 编译自定义包（失败不中断）
+          # ---------------------------
+          for pkg in "${PACKAGES[@]}"; do
+            make "package/custom/$pkg/compile" -j$(nproc) V=s || true
+          done
+
+          # ---------------------------
+          # 收集产物
+          # ---------------------------
+          find bin/packages -type f -name "*.$FORMAT" -exec cp {} "../../$ARTIFACT_DIR/" \;
+
+          popd
+
+      # ---------------------------
+      # 6. 上传产物
+      # ---------------------------
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-packages
+          path: artifacts/

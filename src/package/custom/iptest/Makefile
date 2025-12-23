@@ -1,80 +1,71 @@
-#
 # Copyright (C) 2025 Vivo-Max
 #
 # This is a package for ImmortalWrt/OpenWrt
 #
-
-# 引用 OpenWrt/ImmortalWrt 的规则和 Go 语言包模板
 include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/package.mk
-# 引入 Go 语言包核心支持
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
-# ----------------------------------------------------
-# 软件包基础信息
-# ----------------------------------------------------
 PKG_NAME:=iptest
 PKG_VERSION:=1.2
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
-
-# 设置编译目录 (保留您的原设置)
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
-
-# 依赖 Golang Host 环境
 PKG_BUILD_DEPENDS:=golang/host
 
-# ----------------------------------------------------
-# Go 编译配置 (已修正)
-# ----------------------------------------------------
-# 修复 1: GO_PKG 必须与 go.mod 文件中的 module 名称完全一致，
-# 且应使用 Go 逻辑路径 (假设 go.mod 已修改为 'github.com/Vivo-Max/immortalwrt-iptest/iptest')
 GO_PKG:=github.com/Vivo-Max/immortalwrt-iptest/iptest
-
-# 编译后的二进制文件名
-GO_PKG_BUILD_BIN:=iptest
-
-# 禁用 CGO (OpenWrt/Musl 环境下的标准做法)
 GO_PKG_ENABLE_CGO:=0
+# 指定Go主入口文件（基于您的iptest.go）
+GO_PKG_BUILD_CMD:=./iptest.go
 
-# ----------------------------------------------------
-# 菜单显示定义
-# ----------------------------------------------------
 define Package/iptest
   SECTION:=net
   CATEGORY:=Network
   TITLE:=IP Test Tool
-  DEPENDS:=$(GO_ARCH_DEPENDS)
+  DEPENDS:=$(GO_ARCH_DEPENDS) +luci-base +luci-compat +luci-mod-admin-full +po2lmo  # 添加LuCI依赖和po2lmo（用于po编译）
 endef
 
 define Package/iptest/description
-  A simple IP testing tool written in Go, built from local source.
+  A simple IP testing tool written in Go, with LuCI interface.
 endef
 
-# ----------------------------------------------------
-# 源码准备 (已修正 - 移除 Build/Prepare)
-# ----------------------------------------------------
-# 修复 2: 移除自定义的 Build/Prepare 宏。
-# GoPackage 宏会自动将当前目录下的所有文件 (包括 go.mod, go.sum, *.go)
-# 复制到 PKG_BUILD_DIR，并为 Go 交叉编译环境做好准备。
-# 自定义 Build/Prepare 容易造成冲突和路径错误。
-# define Build/Prepare
-# 	mkdir -p $(PKG_BUILD_DIR)
-# 	$(CP) ./*.go $(PKG_BUILD_DIR)/
-# 	$(CP) ./go.* $(PKG_BUILD_DIR)/
-# endef
+define Build/Prepare
+	$(call Build/Prepare/Default)
+	mkdir -p $(PKG_BUILD_DIR)
+	# 复制Go相关文件到根目录
+	$(CP) ./go.mod $(PKG_BUILD_DIR)/
+	$(CP) ./go.sum $(PKG_BUILD_DIR)/
+	$(CP) ./iptest.go $(PKG_BUILD_DIR)/
+	# 复制luci-app-iptest子目录到构建目录
+	$(CP) -r ./luci-app-iptest $(PKG_BUILD_DIR)/
+endef
 
+define Build/Compile
+	# 先编译Go二进制
+	$(call GoPackage/Build/Compile)
+	# 运行po/Makefile编译po文件（生成mo文件）
+	$(MAKE) -C $(PKG_BUILD_DIR)/luci-app-iptest/files/po
+endef
 
-# ----------------------------------------------------
-# 安装步骤
-# ----------------------------------------------------
-# 使用 GoPackage 提供的标准安装宏，它知道二进制文件 GO_PKG_BUILD_BIN 的位置。
 define Package/iptest/install
+	# 安装Go二进制（默认到/usr/bin/iptest）
 	$(call GoPackage/Package/Install/Bin,$(1))
+	# 安装LuCI控制器
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller
+	$(CP) $(PKG_BUILD_DIR)/luci-app-iptest/files/luasrc/controller/iptest.lua $(1)/usr/lib/lua/luci/controller/
+	# 安装LuCI CBI模型
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi
+	$(CP) $(PKG_BUILD_DIR)/luci-app-iptest/files/luasrc/model/cbi/iptest.lua $(1)/usr/lib/lua/luci/model/cbi/
+	# 安装LuCI视图
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/iptest
+	$(CP) $(PKG_BUILD_DIR)/luci-app-iptest/files/luasrc/view/iptest/log.htm $(1)/usr/lib/lua/luci/view/iptest/
+	# 安装配置文件
+	$(INSTALL_DIR) $(1)/etc/config
+	$(CP) $(PKG_BUILD_DIR)/luci-app-iptest/files/root/etc/config/iptest $(1)/etc/config/
+	# 安装i18n mo文件（假设po/Makefile生成在po目录下）
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/i18n
+	$(CP) $(PKG_BUILD_DIR)/luci-app-iptest/files/po/*.mo $(1)/usr/lib/lua/luci/i18n/
 endef
 
-# ----------------------------------------------------
-# 调用 Go 包构建系统
-# ----------------------------------------------------
-$(eval $(call GoPackage,iptest))
+$(eval $(call GoBinPackage,iptest))
 $(eval $(call BuildPackage,iptest))

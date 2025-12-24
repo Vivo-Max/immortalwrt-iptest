@@ -1,18 +1,21 @@
 name: Build Mediatek Filogic CMCC RAX3000M
+
 on:
-  workflow_dispatch: # 支持手动选择平台
+  workflow_dispatch:
   push:
     branches:
       - main
     paths:
       - 'src/**'
       - 'build.sh'
+
 jobs:
   build_mediatek_filogic:
     runs-on: ubuntu-22.04
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
+
     - name: Free Disk Space
       uses: jlumbroso/free-disk-space@main
       with:
@@ -21,6 +24,7 @@ jobs:
         dotnet: true
         large-packages: true
         swap-storage: true
+
     - name: Install Dependencies
       run: |
         sudo apt-get update
@@ -28,14 +32,31 @@ jobs:
           libncurses-dev libssl-dev ncurses-term openssl \
           python3 python3-setuptools python3-venv python3-pyelftools rsync subversion \
           swig time unzip wget zlib1g-dev
+
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.25'
+
     - name: Run Build Script
       run: |
         chmod +x build.sh
-        # 强制指定: 格式 ipk, 平台索引 0 (Mediatek Filogic CMCC RAX3000M)
-        ./build.sh ipk 0
-    - name: Upload Mediatek Filogic Artifacts
+        # 确保 GOPROXY 加速，防止 Actions 下载依赖超时
+        export GOPROXY=https://proxy.golang.org,direct
+        ./build.sh 0 ipk
+
+    - name: Prepare Artifacts
+      if: always() # 即使部分失败也尝试收集
+      run: |
+        mkdir -p ./upload
+        # 递归寻找所有的 .ipk 文件并移动到 upload 目录
+        find bin/ -name "*.ipk" -exec cp {} ./upload/ \;
+        # 寻找生成的二进制程序
+        [ -d bin/ ] && find bin/ -type f -not -name "*.ipk" -exec cp {} ./upload/ \; || true
+
+    - name: Upload Artifacts
       uses: actions/upload-artifact@v4
-      if: success()
       with:
         name: mediatek-filogic-iptest-packages
-        path: artifacts/
+        path: ./upload/
+        retention-days: 7
